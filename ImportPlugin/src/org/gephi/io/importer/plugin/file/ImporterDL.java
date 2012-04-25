@@ -80,7 +80,11 @@ public class ImporterDL implements FileImporter, LongTask {
     //Data
     private Format format = Format.FULLMATRIX;
     private Map<String, String> headerMap;
-    private int numNodes;
+    private int numRows;
+    private int numCols;
+    private List<NodeDraft> rowNodes = new ArrayList<NodeDraft>();
+    private List<NodeDraft> colNodes = new ArrayList<NodeDraft>();
+    private boolean isSquared;
     private int numMatricies;
     private int dataLineStartDelta = -1;
 
@@ -126,8 +130,26 @@ public class ImporterDL implements FileImporter, LongTask {
 
         computeHeaders();
 
-        if (lines.get(i).toLowerCase().trim().endsWith("labels:") && lines.size() > i + 1) {
-            readLabels(lines.get(++i));
+        if ( isSquared) {
+            if (lines.get(i).toLowerCase().trim().endsWith("labels:") && lines.size() > i + 1) {
+                i = readLabels(lines, rowNodes, 0, numRows, ++i);
+                colNodes.addAll(rowNodes);
+            } else {
+                report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_nolabels"), Issue.Level.SEVERE));
+            }
+        } else {
+            for (int labelSectionNum=0; labelSectionNum<2; ++labelSectionNum) {
+                if (lines.get(i).toLowerCase().trim().endsWith("row labels:") && lines.size() > i + 1) {
+                    i = readLabels(lines, rowNodes, 0, numRows, ++i);
+                    continue;
+                }
+                if (lines.get(i).toLowerCase().trim().endsWith("column labels:") && lines.size() > i + 1) {
+                    i = readLabels(lines, colNodes, numRows, numCols, ++i);
+                    continue;
+                }
+                report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_nolabels"), Issue.Level.SEVERE));
+                break;
+            }
         }
 
         int dataLineStart = -1;
@@ -178,10 +200,31 @@ public class ImporterDL implements FileImporter, LongTask {
             format = Format.FULLMATRIX;
         }
 
-        // read number of nodes
+        // read number of nodes (nodes and columns)
         try {
             String nArg = (String) headerMap.get("n");
-            numNodes = Integer.parseInt(nArg);
+            String nCols = (String) headerMap.get("nc");
+            String nRows = (String) headerMap.get("nr");
+            if ( nArg != null && (nCols != null || nRows != null)) {
+                report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_badmatrixdims"), Issue.Level.SEVERE));
+            } else {
+                if ( nArg != null) {
+                    numCols = numRows = Integer.parseInt(nArg);
+                    isSquared = true;
+                } else {
+                    isSquared = false;
+                    if ( nCols != null) {
+                        numCols = Integer.parseInt(nCols);
+                    } else {
+                        report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_numcolsmissing"), Issue.Level.SEVERE));
+                    }
+                    if ( nRows != null) {
+                        numRows = Integer.parseInt(nRows);
+                    } else {
+                        report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_numrowsmissing"), Issue.Level.SEVERE));
+                    }
+                }
+            }
         } catch (Exception e) {
             report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_nmissing"), Issue.Level.SEVERE));
         }
@@ -199,21 +242,30 @@ public class ImporterDL implements FileImporter, LongTask {
         }
     }
 
-    private void readLabels(String labels) {
-        StringTokenizer labelkonizer = new StringTokenizer(labels, ",");
-        // check that there are the right number of labels
-        if (labelkonizer.countTokens() != numNodes) {
-            report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_labelscount", labelkonizer.countTokens(), numNodes), Issue.Level.SEVERE));
-        }
+    private int readLabels(List<String> lines, List<NodeDraft> nodes, int offset,int cols, int start) {
+        int lnNum=start;
         int nodeCount = 0;
-        while (labelkonizer.hasMoreTokens()) {
-            String label = labelkonizer.nextToken();
-            nodeCount++;
-            NodeDraft nodeDraft = container.factory().newNodeDraft();
-            nodeDraft.setId("" + nodeCount);
-            nodeDraft.setLabel(label);
-            container.addNode(nodeDraft);
+        for (; lnNum<lines.size(); ++lnNum) {
+            String line = lines.get(lnNum).toLowerCase();
+            if (line.trim().endsWith("data:") || line.trim().endsWith("labels:")) {
+                break;
+            }
+            StringTokenizer labelkonizer = new StringTokenizer(line, ",");
+            while (labelkonizer.hasMoreTokens()) {
+                String label = labelkonizer.nextToken();
+                nodeCount++;
+                NodeDraft nodeDraft = container.factory().newNodeDraft();
+                nodeDraft.setId("" + (nodeCount+offset));
+                nodeDraft.setLabel(label);
+                container.addNode(nodeDraft);
+                nodes.add(nodeDraft);
+            }
         }
+        // check that there are the right number of labels
+        if (nodeCount != cols) {
+            report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_labelscount", nodeCount, cols), Issue.Level.SEVERE));
+        }
+        return lnNum;
     }
 
     private void readeMatrixBlock(List<String> data) {
@@ -221,16 +273,16 @@ public class ImporterDL implements FileImporter, LongTask {
         for (int i = 0; i < data.size(); i++) {
             int rowNum = 0;
             for (; i < data.size() && !data.get(i).trim().equals("!"); i++) {
-                if (rowNum <= numNodes) {
+                if (rowNum <= numRows) {
                     readMatrixRow(data.get(i), i, rowNum, startTime, startTime + 1);
                     rowNum++;
                 } else {
-                    report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_matrixrowscount", rowNum, numNodes), Issue.Level.SEVERE));
+                    report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_matrixrowscount", rowNum, numRows), Issue.Level.SEVERE));
                     break;
                 }
             }
-            if (rowNum < numNodes) {
-                report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_matrixrowscount2", rowNum, numNodes), Issue.Level.SEVERE));
+            if (rowNum < numRows) {
+                report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_matrixrowscount2", rowNum, numRows), Issue.Level.SEVERE));
             }
             startTime++;
         }
@@ -239,15 +291,14 @@ public class ImporterDL implements FileImporter, LongTask {
         }
     }
 
-    private void readMatrixRow(String line, int pointer, int row, int startTime, int endTime) {
+    private void readMatrixRow(final String line, final int pointer, final int from, final int startTime, final int endTime) {
         StringTokenizer rowkonizer = new StringTokenizer(line, " ");
-        int from = row + 1;
-        int to = 1;
+        int to = 0;
         double weight = 0;
         while (rowkonizer.hasMoreTokens()) {
             String toParse = (String) rowkonizer.nextToken();
-            if (to > numNodes) {
-                report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_matrixentriescount", row, startTime, getLineNumber(pointer)), Issue.Level.SEVERE));
+            if (to >= numCols) {
+                report.logIssue(new Issue(NbBundle.getMessage(ImporterDL.class, "importerDL_error_matrixentriescount", from, startTime, getLineNumber(pointer)), Issue.Level.SEVERE));
             }
             try {
                 weight = Double.parseDouble(toParse);
@@ -256,8 +307,8 @@ public class ImporterDL implements FileImporter, LongTask {
             }
 
             if (weight != 0) {
-                NodeDraft sourceNode = container.getNode("" + from);
-                NodeDraft targetNode = container.getNode("" + to);
+                NodeDraft sourceNode = rowNodes.get(from);
+                NodeDraft targetNode = colNodes.get(to);
                 EdgeDraft edgeDraft = null;
                 if (container.edgeExists(sourceNode, targetNode)) {
                     edgeDraft = container.getEdge(sourceNode, targetNode);
