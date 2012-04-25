@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+OpenIDE-Module: fr.enst.oboturov.bipartite.plugin
+OpenIDE-Module-Implementation-Version: 7
+OpenIDE-Module-Localizing-Bundle: fr/enst/oboturov/bipartite/plugin/Bundle.properties
+
